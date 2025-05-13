@@ -1,0 +1,53 @@
+name: Deploy NextJS App
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Upload Source Code to VPS
+        uses: easingthemes/ssh-deploy@v2.1.5
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          REMOTE_HOST: ${{ secrets.HOST }}
+          REMOTE_USER: ${{ secrets.USER }}
+          SOURCE: "./"
+          TARGET: ${{ secrets.PROJECT_DIRECTORY }}
+          ARGS: "-avz --delete --exclude='.env.production' --exclude='.env.local' --exclude='.git' --exclude='.github'"
+
+      - name: Build Application
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e  # Exit on error
+
+            echo "Switching to frontend project directory..."
+            cd ${{ secrets.PROJECT_DIRECTORY }}
+
+            if [ ! -f "package.json" ]; then
+              echo "❌ Error: package.json not found"
+              exit 1
+            fi
+
+            echo "Cleaning old build..."
+            rm -rf node_modules .next
+
+            echo "Installing dependencies..."
+            npm install
+
+            echo "Building project..."
+            npm run build
+
+            echo "Restarting PM2 process..."
+            pm2 restart next-app

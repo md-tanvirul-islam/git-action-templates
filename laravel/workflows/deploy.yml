@@ -1,0 +1,90 @@
+name: Deploy Laravel Application
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  APP_NAME: Laravel-API
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set build date
+        run: echo "BUILD_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mbstring, ctype, fileinfo, openssl, pdo, mysql, tokenizer, xml, dom, curl
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Composer dependencies
+        run: |
+          composer install --optimize-autoloader --no-dev --no-progress --no-interaction --prefer-dist
+
+      - name: Install NPM dependencies
+        run: npm ci --prefer-offline
+
+      - name: Build assets
+        run: npm run build
+
+      - name: Sync files to server
+        uses: easingthemes/ssh-deploy@v2.1.5
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SOURCE: "./"
+          REMOTE_HOST: ${{ secrets.HOST }}
+          REMOTE_USER: ${{ secrets.USER }}
+          TARGET: ${{ secrets.PROJECT_DIRECTORY }}
+          ARGS: "-avz --delete --exclude='.env' --exclude='.git' --exclude='.github'"
+
+      - name: Execute remote commands
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e  # Exit on any error
+
+            cd ${{ secrets.PROJECT_DIRECTORY }}
+
+            echo "Checking APP_KEY..."
+            if grep -q "APP_KEY=" .env && [ -n "$(grep 'APP_KEY=' .env | cut -d '=' -f2)" ]; then
+                echo "APP_KEY already exists, skipping key:generate"
+            else
+                php artisan key:generate
+            fi
+
+            echo "Running Artisan commands..."
+            php artisan cache:clear
+            php artisan config:clear
+            php artisan view:clear
+            php artisan route:clear
+            php artisan optimize:clear
+
+            echo "Running migrations..."
+            php artisan migrate --force
+
+            echo "Database seeding"
+            php artisan db:seed
+
+            echo "Dumping autoload..."
+            php /usr/bin/composer dump-autoload
+
+            echo "Restarting queue..."
+            php artisan queue:restart
